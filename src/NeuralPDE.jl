@@ -1,16 +1,26 @@
-module NeuralNetDiffEq
+module NeuralPDE
 
 using Reexport, Statistics
 @reexport using DiffEqBase
 
 using Flux, Zygote, DiffEqSensitivity, ForwardDiff, Random, Distributions
-using DiffEqFlux, Adapt, CuArrays, StochasticDiffEq
+using DiffEqFlux, Adapt, DiffEqNoiseProcess, CuArrays, StochasticDiffEq
 using ModelingToolkit
-
 import Tracker, Optim
 
-abstract type NeuralNetDiffEqAlgorithm <: DiffEqBase.AbstractODEAlgorithm end
-
+abstract type NeuralPDEAlgorithm <: DiffEqBase.AbstractODEAlgorithm end
+"""
+    TerminalPDEProblem(g, f, μ, σ, x0, tspan)
+A semilinear parabolic PDE problem with a terminal condition.
+Consider `du/dt = l(u) + f(u)`; where l is the non linear Lipschitz function
+# Arguments
+* `g` : The terminal condition for the equation.
+* `f` : The function f(u)
+* `μ` : The drift function of X from Ito's Lemma
+* `μ` : The noise function of X from Ito's Lemma
+* `x0`: The initial X for the problem.
+* `tspan`: The timespan of the problem.
+"""
 struct TerminalPDEProblem{G,F,Mu,Sigma,X,T,P,A,UD,K} <: DiffEqBase.DEProblem
     g::G
     f::F
@@ -37,6 +47,18 @@ function Base.show(io::IO, A::TerminalPDEProblem)
   show(io,A.tspan)
 end
 
+"""
+    KolmogorovPDEProblem(f , g, phi , xspan , tspan, d, noise_rate_prototype = none)
+A standard Kolmogorov PDE Problem.
+# Arguments
+* `f` : The drift function from Feynman-Kac representation of the PDE.
+* `g` : The noise function from Feynman-Kac representation of the PDE.
+* `phi` : The terminal condition for the PDE.
+* `tspan`: The timespan for the problem.
+* `xspan`: The xspan for the problem.
+* `d`: The dimensions of the input x.
+* `noise_rate_prototype`: A prototype type instance for the noise rates, that is the output g.
+"""
 struct KolmogorovPDEProblem{ F, G, Phi, X , T , D ,P,U0, ND} <: DiffEqBase.DEProblem
     f::F
     g::G
@@ -63,27 +85,51 @@ function Base.show(io::IO, A::KolmogorovPDEProblem)
   show(io , A.g)
 end
 
-struct NNPDEProblem{PDEFunction,BC} <:DiffEqBase.DEProblem
+"""
+    NNPDEProblem(pde_func, train_sets, dim)
+The PINNs Problem.
+# Arguments
+* `pde_func` : The PDE function
+* `train_sets`: Training sets on the domain and boundary spaces
+* `dim`: The dimensions of the problem.
+"""
+struct NNPDEProblem{PDEFunction,Function,TS} <:DiffEqBase.DEProblem
   pde_func::PDEFunction
-  train_sets ::BC
+  bc_func:: Array{Function}
+  train_sets ::TS
   dim :: Int64
-  NNPDEProblem(pde_func,train_sets,dim) = new{typeof(pde_func),
+  NNPDEProblem(pde_func,bc_func,train_sets,dim) = new{typeof(pde_func),
+                                          eltype(bc_func),
                                           typeof(train_sets)
-                                          }(pde_func,train_sets,dim)
+                                          }(pde_func,bc_func,train_sets,dim)
 end
 Base.summary(prob::NNPDEProblem) = string(nameof(typeof(prob)))
 
 function Base.show(io::IO, A::NNPDEProblem)
   println(io,summary(A))
-  print(io,"pde_func: ")
+  print(io,"pde_function: ")
   show(io,A.pde_func)
+  print(io,"bc_function: ")
+  show(io,A.bc_func)
   print(io,"train_sets: ")
   show(io,A.train_sets)
   print(io,"dimensionality: ")
   show(io,A.dim)
 end
 
-struct NNDE{C,O,P,K} <: NeuralNetDiffEqAlgorithm
+"""
+Algorithm for solving differential equation using neural network.
+
+```julia
+NeuralPDE.NNStopping(chain, opt, sdealg, ensemblealg )
+```
+Arguments:
+- `chain`: A Chain neural network
+- `opt`: The optimiser to train the neural network. Defaults to `BFGS()`
+- `initθ`: The initial parameter of the neural network
+- `autodiff`: The switch between automatic and numerical differentiation
+"""
+struct NNDE{C,O,P,K} <: NeuralPDEAlgorithm
     chain::C
     opt::O
     initθ::P
@@ -108,12 +154,11 @@ include("ode_solve.jl")
 include("pde_solve.jl")
 include("pde_solve_ns.jl")
 include("kolmogorov_solve.jl")
+include("rode_solve.jl")
 include("stopping_solve.jl")
 include("pinns_pde_solve.jl")
 
-
-
-export NNDE, TerminalPDEProblem, NNPDEHan, NNPDENS,
+export NNDE, TerminalPDEProblem, NNPDEHan, NNPDENS, NNRODE,
        KolmogorovPDEProblem, NNKolmogorov, NNStopping,
        NNPDEProblem, PhysicsInformedNN, discretize
 
